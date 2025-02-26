@@ -4,11 +4,16 @@ import Link from 'next/link';
 import { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import DataEntryForm from '@/components/DataEntryForm';
+import { useRef } from 'react';
+import Papa from 'papaparse';
 
 export default function DataManagement() {
   const [data, setData] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
-
+  const [importLoading, setImportLoading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [editingCell, setEditingCell] = useState<{id: number, field: string} | null>(null);
+  const [editValue, setEditValue] = useState<string>('');
   const fetchData = async () => {
     try {
       setIsLoading(true);
@@ -30,6 +35,80 @@ export default function DataManagement() {
     fetchData();
   }, []);
 
+  const handleImportClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+  
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    
+    setImportLoading(true);
+    
+    try {
+      const text = await readFileAsText(file);
+      
+      // Papaparse でCSVをパース
+      Papa.parse(text, {
+        header: true,
+        dynamicTyping: true,
+        skipEmptyLines: true,
+        complete: async (results) => {
+          if (results.data && results.data.length > 0) {
+            // データ形式を整える
+            const formattedData = results.data.map(row => ({
+              company_name: row.company_name || 'Default Company',
+              fiscal_month: row.fiscal_month || '',
+              category1: row.category1 || '',
+              category2: row.category2 || null,
+              category3: row.category3 || null,
+              amount: parseFloat(row.amount) || 0,
+              notes: row.notes || null,
+              updated_at: new Date().toISOString()
+            }));
+            
+            // Supabaseにデータをインサート
+            const { error } = await supabase
+              .from('financial_data')
+              .insert(formattedData);
+              
+            if (error) {
+              console.error('インポートエラー:', error);
+              alert(`インポートエラー: ${error.message}`);
+              return;
+            }
+            
+            // データを再取得
+            fetchData();
+            alert(`${formattedData.length}件のデータをインポートしました`);
+          }
+        },
+        error: (error) => {
+          console.error('CSV解析エラー:', error);
+          alert('CSVファイルの解析に失敗しました');
+        }
+      });
+    } catch (error) {
+      console.error('ファイル読み込みエラー:', error);
+      alert('ファイルの読み込みに失敗しました');
+    } finally {
+      setImportLoading(false);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+  
+  const readFileAsText = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as string);
+      reader.onerror = (e) => reject(e);
+      reader.readAsText(file, 'utf-8');
+    });
+  };
   const handleDelete = async (id) => {
     try {
       const { error } = await supabase
@@ -44,19 +123,71 @@ export default function DataManagement() {
       console.error('Error deleting row:', error);
     }
   };
+  const startEditing = (id: number, field: string, value: any) => {
+    setEditingCell({ id, field });
+    setEditValue(value?.toString() || '');
+  };
+  
+  const saveEdit = async () => {
+    if (!editingCell) return;
+    
+    try {
+      const { id, field } = editingCell;
+      let value = editValue;
+      
+      // 数値の場合は型変換
+      if (field === 'amount') {
+        value = parseFloat(editValue);
+        if (isNaN(value)) {
+          alert('有効な数値を入力してください');
+          return;
+        }
+      }
+      
+      // Supabaseでデータを更新
+      const { error } = await supabase
+        .from('financial_data')
+        .update({ [field]: value })
+        .eq('id', id);
+        
+      if (error) {
+        console.error('更新エラー:', error);
+        alert(`更新エラー: ${error.message}`);
+        return;
+      }
+      
+      // 編集状態をリセット
+      setEditingCell(null);
+      
+      // データを再取得
+      fetchData();
+      
+    } catch (error) {
+      console.error('データ更新エラー:', error);
+      alert('データの更新に失敗しました');
+    }
+  };
 
   const exportCsv = () => {
     if (data.length === 0) return;
     
+    // BOMを追加して文字化けを防止
+    const BOM = new Uint8Array([0xEF, 0xBB, 0xBF]);
+    
     const headers = Object.keys(data[0]).join(',');
     const csvRows = data.map(row => {
       return Object.values(row).map(value => {
-        return typeof value === 'string' ? `"${value}"` : value;
+        // nullや空の値を処理
+        if (value === null || value === undefined) return '';
+        // 文字列に変換し、カンマやダブルクォートをエスケープ
+        return typeof value === 'string' ? `"${value.replace(/"/g, '""')}"` : value;
       }).join(',');
     });
     
     const csvContent = [headers, ...csvRows].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    
+    // BOMとCSVデータを結合
+    const blob = new Blob([BOM, csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
@@ -118,16 +249,25 @@ export default function DataManagement() {
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-xl font-semibold">データ一覧</h2>
                 <div className="flex space-x-2">
-                  <button 
+                <button 
                     onClick={exportCsv}
                     className="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-sm"
                   >
                     CSVエクスポート
                   </button>
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    accept=".csv"
+                    style={{ display: 'none' }}
+                    onChange={handleFileChange}
+                  />
                   <button 
-                    className="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 text-sm"
+                    onClick={handleImportClick}
+                    disabled={importLoading}
+                    className="px-3 py-1 bg-green-500 text-white rounded hover:bg-green-600 text-sm disabled:opacity-50"
                   >
-                    CSVインポート
+                    {importLoading ? '処理中...' : 'CSVインポート'}
                   </button>
                 </div>
               </div>

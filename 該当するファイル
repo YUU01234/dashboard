@@ -1,0 +1,57 @@
+import { useEffect, useState } from 'react';
+import dynamic from 'next/dynamic';
+
+const handleSubmit = async (e) => {
+  e.preventDefault();
+  try {
+    // フォーム送信処理
+    const response = await fetch('/api/your-endpoint', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(formData),
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    // 成功時の処理
+  } catch (error) {
+    console.error('Error submitting form:', error);
+    console.error('Error details:', {
+      message: error.message,
+      stack: error.stack,
+      name: error.name
+    });
+    // エラー処理
+  }
+};
+
+const ClientOnlyComponent = dynamic(() => import('./ClientOnlyComponent'), {
+  ssr: false // サーバーサイドレンダリングを無効化
+});
+
+function YourComponent() {
+  const [isClient, setIsClient] = useState(false);
+  
+  useEffect(() => {
+    setIsClient(true);
+    // クライアントサイドでのみ実行したいコードをここに記述
+  }, []);
+  
+  // サーバーサイドレンダリング時は特定の部分を表示しない
+  if (!isClient) {
+    return <div>Loading...</div>; // または最小限のUI
+  }
+  
+  return (
+    <div>
+      <ClientOnlyComponent />
+    </div>
+  );
+}
+
+export default YourComponent; 

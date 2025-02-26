@@ -1,18 +1,39 @@
+'use client';
+
 import React, { useState, useEffect } from 'react';
 
-// 修正前 - ハイドレーションエラーの原因
-const windowWidth = window.innerWidth;
+// This component properly handles window access on the client side only
+const WindowSizeComponent = () => {
+  const [windowWidth, setWindowWidth] = useState(0);
 
-// 修正後 - useEffectでクライアント側のみで実行
-const [windowWidth, setWindowWidth] = useState(0);
-
-useEffect(() => {
-  setWindowWidth(window.innerWidth);
-  
-  const handleResize = () => {
+  useEffect(() => {
+    // Setting initial value only on client-side
     setWindowWidth(window.innerWidth);
-  };
-  
-  window.addEventListener('resize', handleResize);
-  return () => window.removeEventListener('resize', handleResize);
-}, []); 
+    
+    // Adding event listener for window resize
+    const handleResize = () => {
+      setWindowWidth(window.innerWidth);
+    };
+    
+    window.addEventListener('resize', handleResize);
+    
+    // Cleanup function to remove event listener
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  return (
+    <div>
+      <p>Current window width: {windowWidth}px</p>
+    </div>
+  );
+};
+
+// Main page component
+export default function ExamplePage() {
+  return (
+    <div className="p-4">
+      <h1 className="text-2xl font-bold mb-4">Example Page</h1>
+      <WindowSizeComponent />
+    </div>
+  );
+}
