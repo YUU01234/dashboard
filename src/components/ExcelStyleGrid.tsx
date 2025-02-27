@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
@@ -83,6 +85,8 @@ const CATEGORY_HIERARCHY = {
 };
 
 const ExcelStyleGrid: React.FC<ExcelStyleGridProps> = ({ data, onDataChange, onDelete }) => {
+  // Client-side only state - prevents hydration mismatch
+  const [isClient, setIsClient] = useState(false);
   const [editingCell, setEditingCell] = useState<{
     rowId: number;
     column: string;
@@ -96,7 +100,14 @@ const ExcelStyleGrid: React.FC<ExcelStyleGridProps> = ({ data, onDataChange, onD
   const [category2Options, setCategory2Options] = useState<string[]>([]);
   const [category3Options, setCategory3Options] = useState<string[]>([]);
 
+  // This effect runs only on the client after initial hydration
   useEffect(() => {
+    setIsClient(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isClient) return;
+
     // データを取得時に会計月のフォーマットを確認・修正
     const formattedData = data.map(row => {
       let formattedRow = { ...row };
@@ -116,35 +127,39 @@ const ExcelStyleGrid: React.FC<ExcelStyleGridProps> = ({ data, onDataChange, onD
     });
     
     setGridData(formattedData);
-  }, [data]);
+  }, [data, isClient]);
 
-  // Focus on input when editing starts
+  // Focus on input when editing starts - only on client
   useEffect(() => {
-    if (editingCell) {
-      if (editingCell.column === 'category1' || editingCell.column === 'category2' || editingCell.column === 'category3') {
-        // セレクトボックスにフォーカス
-        selectRef.current?.focus();
-      } else {
-        // 通常の入力フィールドにフォーカス
-        inputRef.current?.focus();
-      }
+    if (!isClient || !editingCell) return;
+
+    if (editingCell.column === 'category1' || editingCell.column === 'category2' || editingCell.column === 'category3') {
+      // セレクトボックスにフォーカス
+      selectRef.current?.focus();
+    } else {
+      // 通常の入力フィールドにフォーカス
+      inputRef.current?.focus();
     }
-  }, [editingCell]);
+  }, [editingCell, isClient]);
 
   // カテゴリ1に応じたカテゴリ2のオプションを更新
   useEffect(() => {
-    if (editingCell?.column === 'category2' && editingCell.rowId) {
+    if (!isClient || !editingCell) return;
+    
+    if (editingCell.column === 'category2' && editingCell.rowId) {
       const row = gridData.find(r => r.id === editingCell.rowId);
       if (row && row.category1) {
         const options = row.category1 in CATEGORY_HIERARCHY ? Object.keys(CATEGORY_HIERARCHY[row.category1]) : [];
         setCategory2Options(options);
       }
     }
-  }, [editingCell, gridData]);
+  }, [editingCell, gridData, isClient]);
 
   // カテゴリ1と2に応じたカテゴリ3のオプションを更新
   useEffect(() => {
-    if (editingCell?.column === 'category3' && editingCell.rowId) {
+    if (!isClient || !editingCell) return;
+    
+    if (editingCell.column === 'category3' && editingCell.rowId) {
       const row = gridData.find(r => r.id === editingCell.rowId);
       if (row && row.category1 && row.category2) {
         const cat1Options = CATEGORY_HIERARCHY[row.category1] || {};
@@ -152,36 +167,108 @@ const ExcelStyleGrid: React.FC<ExcelStyleGridProps> = ({ data, onDataChange, onD
         setCategory3Options(options);
       }
     }
-  }, [editingCell, gridData]);
+  }, [editingCell, gridData, isClient]);
+
+  // 選択したカテゴリのバリデーションを行う
+  const validateCategorySelection = (rowId: number, column: string, value: string) => {
+    if (!value) return true; // 空の値はOK
+    
+    const row = gridData.find(r => r.id === rowId);
+    if (!row) return false;
+
+    // カテゴリ1のバリデーション
+    if (column === 'category1') {
+      return Object.keys(CATEGORY_HIERARCHY).includes(value);
+    }
+    
+    // カテゴリ2のバリデーション
+    if (column === 'category2') {
+      if (!row.category1) return false;
+      return Object.keys(CATEGORY_HIERARCHY[row.category1] || {}).includes(value);
+    }
+    
+    // カテゴリ3のバリデーション
+    if (column === 'category3') {
+      if (!row.category1 || !row.category2) return false;
+      const options = CATEGORY_HIERARCHY[row.category1]?.[row.category2] || [];
+      return options.includes(value);
+    }
+    
+    return true;
+  };
+
+  // カテゴリの依存関係に基づいて他のカテゴリをリセット
+  const resetDependentCategories = (rowId: number, column: string, value: string) => {
+    const updatedData = [...gridData];
+    const rowIndex = updatedData.findIndex(r => r.id === rowId);
+    
+    if (rowIndex === -1) return updatedData;
+    
+    if (column === 'category1') {
+      // カテゴリ1が変更されたら、カテゴリ2と3をリセット
+      updatedData[rowIndex] = {
+        ...updatedData[rowIndex],
+        category1: value,
+        category2: null,
+        category3: null
+      };
+    } else if (column === 'category2') {
+      // カテゴリ2が変更されたら、カテゴリ3をリセット
+      updatedData[rowIndex] = {
+        ...updatedData[rowIndex],
+        category2: value,
+        category3: null
+      };
+    } else if (column === 'category3') {
+      // カテゴリ3のみ変更
+      updatedData[rowIndex] = {
+        ...updatedData[rowIndex],
+        category3: value
+      };
+    }
+    
+    return updatedData;
+  };
 
   // Handle clicking on a cell to start editing
   const handleCellClick = (rowId: number, column: string, value: any) => {
+    if (!isClient) return;
+    
     // Don't allow editing the ID column
     if (column === 'id') return;
 
     // カテゴリー2の選択時、カテゴリー1に基づく選択肢を設定
     if (column === 'category2') {
       const row = gridData.find(r => r.id === rowId);
-      if (row && row.category1) {
-        const options = row.category1 in CATEGORY_HIERARCHY ? Object.keys(CATEGORY_HIERARCHY[row.category1]) : [];
-        setCategory2Options(options);
+      if (!row || !row.category1) {
+        alert('カテゴリ2を選択する前に、カテゴリ1を選択してください');
+        return;
+      }
+      
+      const options = row.category1 in CATEGORY_HIERARCHY ? Object.keys(CATEGORY_HIERARCHY[row.category1]) : [];
+      setCategory2Options(options);
+      
+      if (options.length === 0) {
+        alert('選択したカテゴリ1には、関連するカテゴリ2がありません');
+        return;
       }
     }
     
     // カテゴリー3の選択時、カテゴリー1と2に基づく選択肢を設定
     if (column === 'category3') {
       const row = gridData.find(r => r.id === rowId);
-      if (row && row.category1 && row.category2) {
-        const cat1Options = CATEGORY_HIERARCHY[row.category1] || {};
-        const options = cat1Options[row.category2] || [];
-        setCategory3Options(options);
-        
-        // カテゴリ3の選択肢がない場合は編集をキャンセル
-        if (options.length === 0) {
-          return;
-        }
-      } else {
-        return; // カテゴリ1か2が選択されていない場合は編集不可
+      if (!row || !row.category1 || !row.category2) {
+        alert('カテゴリ3を選択する前に、カテゴリ1とカテゴリ2を選択してください');
+        return;
+      }
+      
+      const cat1Options = CATEGORY_HIERARCHY[row.category1] || {};
+      const options = cat1Options[row.category2] || [];
+      setCategory3Options(options);
+      
+      if (options.length === 0) {
+        alert('選択したカテゴリ1とカテゴリ2の組み合わせには、関連するカテゴリ3がありません');
+        return;
       }
     }
     
@@ -194,44 +281,34 @@ const ExcelStyleGrid: React.FC<ExcelStyleGridProps> = ({ data, onDataChange, onD
 
   // Handle input change during editing
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
-    if (!editingCell) return;
+    if (!isClient || !editingCell) return;
     
-    setEditingCell({
-      ...editingCell,
-      value: e.target.value,
-    });
+    const { value } = e.target;
+    const { rowId, column } = editingCell;
     
-    // カテゴリー1の変更時、関連するカテゴリ2や3をリセット
-    if (editingCell.column === 'category1') {
-      const rowIndex = gridData.findIndex(row => row.id === editingCell.rowId);
-      if (rowIndex !== -1) {
-        const updatedData = [...gridData];
-        updatedData[rowIndex] = {
-          ...updatedData[rowIndex],
-          category2: null,
-          category3: null
-        };
-        setGridData(updatedData);
+    // カテゴリの選択が有効かどうかをチェック
+    if ((column === 'category1' || column === 'category2' || column === 'category3') && value) {
+      if (!validateCategorySelection(rowId, column, value)) {
+        alert('無効なカテゴリ選択です');
+        return;
       }
     }
     
-    // カテゴリー2の変更時、関連するカテゴリ3をリセット
-    if (editingCell.column === 'category2') {
-      const rowIndex = gridData.findIndex(row => row.id === editingCell.rowId);
-      if (rowIndex !== -1) {
-        const updatedData = [...gridData];
-        updatedData[rowIndex] = {
-          ...updatedData[rowIndex],
-          category3: null
-        };
-        setGridData(updatedData);
-      }
+    setEditingCell({
+      ...editingCell,
+      value: value,
+    });
+    
+    // カテゴリの依存関係に基づいて他のカテゴリをリセット
+    if (column === 'category1' || column === 'category2' || column === 'category3') {
+      const updatedData = resetDependentCategories(rowId, column, value);
+      setGridData(updatedData);
     }
   };
 
   // Handle key presses during editing (for navigation and submission)
   const handleKeyDown = async (e: React.KeyboardEvent<HTMLInputElement | HTMLSelectElement>) => {
-    if (!editingCell) return;
+    if (!isClient || !editingCell) return;
 
     // Handle special keys
     if (e.key === 'Escape') {
@@ -290,7 +367,7 @@ const ExcelStyleGrid: React.FC<ExcelStyleGridProps> = ({ data, onDataChange, onD
 
   // Handle saving changes to the database
   const saveChanges = async () => {
-    if (!editingCell) return;
+    if (!isClient || !editingCell) return;
     
     try {
       const { rowId, column, value } = editingCell;
@@ -327,28 +404,36 @@ const ExcelStyleGrid: React.FC<ExcelStyleGridProps> = ({ data, onDataChange, onD
         processedValue = null;
       }
       
-      // カテゴリ3が選択されている場合、カテゴリ1と2が選択されているか確認
-      if (column === 'category3' && processedValue) {
-        const currentRow = gridData.find(row => row.id === rowId);
-        if (!currentRow?.category1 || !currentRow?.category2) {
-          alert('カテゴリ3を選択する前に、カテゴリ1とカテゴリ2を選択してください');
+      // カテゴリのバリデーション
+      if ((column === 'category1' || column === 'category2' || column === 'category3') && processedValue) {
+        if (!validateCategorySelection(rowId, column, processedValue)) {
+          alert(`選択された${getColumnDisplayName(column)}は無効です`);
           return;
         }
-        
-        // 選択されたカテゴリ3が、選択されたカテゴリ1と2の組み合わせで有効か確認
-        const validCat3Options = 
-          CATEGORY_HIERARCHY[currentRow.category1]?.[currentRow.category2] || [];
-        
-        if (!validCat3Options.includes(processedValue)) {
-          alert('選択されたカテゴリ3は、現在のカテゴリ1とカテゴリ2の組み合わせでは無効です');
-          return;
-        }
+      }
+      
+      // カテゴリの依存関係に基づいて他のカテゴリをリセット
+      let updateData: Record<string, any> = {};
+      
+      if (column === 'category1') {
+        updateData = {
+          category1: processedValue,
+          category2: null,
+          category3: null
+        };
+      } else if (column === 'category2') {
+        updateData = {
+          category2: processedValue,
+          category3: null
+        };
+      } else {
+        updateData = { [column]: processedValue };
       }
       
       // Update the local data first for immediate feedback
       const updatedData = gridData.map(row => {
         if (row.id === rowId) {
-          return { ...row, [column]: processedValue };
+          return { ...row, ...updateData };
         }
         return row;
       });
@@ -357,7 +442,7 @@ const ExcelStyleGrid: React.FC<ExcelStyleGridProps> = ({ data, onDataChange, onD
       // Update the database
       const { error } = await supabase
         .from('financial_data')
-        .update({ [column]: processedValue })
+        .update(updateData)
         .eq('id', rowId);
       
       if (error) {
@@ -519,15 +604,54 @@ const ExcelStyleGrid: React.FC<ExcelStyleGridProps> = ({ data, onDataChange, onD
     );
   };
 
-  // カテゴリ3のセルをクリック可能かどうか判断
-  const isCategory3Clickable = (row: DataRow) => {
-    if (!row.category1 || !row.category2) return false;
+  // カテゴリが編集可能かどうかを判断する
+  const isCategoryEditable = (row: DataRow, column: string) => {
+    // カテゴリ1は常に編集可能
+    if (column === 'category1') return true;
     
-    const options = 
-      CATEGORY_HIERARCHY[row.category1]?.[row.category2] || [];
+    // カテゴリ2はカテゴリ1が選択されている場合のみ編集可能
+    if (column === 'category2') {
+      return !!row.category1;
+    }
     
-    return options.length > 0;
+    // カテゴリ3はカテゴリ1と2が選択されていて、選択肢がある場合のみ編集可能
+    if (column === 'category3') {
+      if (!row.category1 || !row.category2) return false;
+      
+      const options = 
+        CATEGORY_HIERARCHY[row.category1]?.[row.category2] || [];
+      
+      return options.length > 0;
+    }
+    
+    return true;
   };
+
+  // Don't render anything meaningful during SSR to avoid hydration issues
+  if (!isClient) {
+    return (
+      <div className="overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              {['ID', '会社名', '会計月', 'カテゴリ1', 'カテゴリ2', 'カテゴリ3', '金額', '備考', 'アクション'].map(col => (
+                <th key={col} className="px-4 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">
+                  {col}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="bg-white">
+            <tr>
+              <td colSpan={9} className="px-4 py-4 text-center text-sm text-gray-500">
+                Loading...
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    );
+  }
 
   return (
     <div className="overflow-x-auto">
@@ -553,21 +677,18 @@ const ExcelStyleGrid: React.FC<ExcelStyleGridProps> = ({ data, onDataChange, onD
             gridData.map(row => (
               <tr key={row.id} className="hover:bg-blue-50">
                 {getVisibleColumns().map(column => {
-                  // カテゴリー3のセルは、関連するカテゴリーが選択されていない場合は編集不可
-                  const isDisabled = 
-                    column === 'category3' && !isCategory3Clickable(row);
+                  // セルが編集可能かどうか判断
+                  const isEditable = column !== 'id' && isCategoryEditable(row, column);
                   
                   return (
                     <td
                       key={`${row.id}-${column}`}
                       className={`px-4 py-2 whitespace-nowrap 
-                        ${column !== 'id' && !isDisabled ? 'cursor-pointer hover:bg-gray-100' : ''}
-                        ${isDisabled ? 'opacity-50' : ''}
+                        ${isEditable ? 'cursor-pointer hover:bg-gray-100' : ''}
+                        ${!isEditable && column !== 'id' ? 'opacity-50' : ''}
                       `}
-                      onClick={() => 
-                        column !== 'id' && !isDisabled && 
-                        handleCellClick(row.id, column, row[column])
-                      }
+                      onClick={() => isEditable && handleCellClick(row.id, column, row[column])}
+                      title={!isEditable && column !== 'id' ? '先に親カテゴリを選択してください' : ''}
                     >
                       {renderCell(row, column)}
                     </td>
