@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 
 interface DataEntryFormProps {
@@ -17,6 +17,69 @@ interface FormData {
   notes: string;
 }
 
+// カテゴリの階層関係データ
+const CATEGORY_HIERARCHY = {
+  "売上高": {
+    "派遣業": [],
+    "警備業": []
+  },
+  "製造原価": {
+    "派遣人件費": [],
+    "警備人件費": [],
+    "法定福利費": [],
+    "福利厚生費": [],
+    "経費": [
+      "派遣旅費交通費",
+      "警備旅費交通費", 
+      "広告宣伝費",
+      "消耗品費",
+      "支払手数料",
+      "研修費",
+      "その他"
+    ]
+  },
+  "販売費・一般管理費": {
+    "給与手当": [],
+    "賞与繰入": [],
+    "法定福利費": [],
+    "福利厚生費": [],
+    "雑給": [],
+    "社員研修費": [],
+    "経費": [
+      "通勤交通費",
+      "広告宣伝費",
+      "支払手数料",
+      "リース料",
+      "水道光熱費",
+      "車両関連費",
+      "事務用品・消耗品費",
+      "支払保険料",
+      "修繕費",
+      "減価償却費",
+      "接待交際費",
+      "旅費交通費",
+      "通信費",
+      "地代家賃",
+      "会議費",
+      "諸会費"
+    ],
+    "報酬手当": [],
+    "本部負担金": []
+  },
+  "営業外収益": {
+    "受取利息": [],
+    "受取配当金": [],
+    "賃貸収入": [],
+    "雑収入": []
+  },
+  "営業外費用": {
+    "支払利息": [],
+    "有価証券手数料": [],
+    "賃貸減価償却費": [],
+    "賃貸租税公課": []
+  }
+};
+
 const DataEntryForm = ({ onSuccess }: DataEntryFormProps) => {
   const [formData, setFormData] = useState<FormData>({
     company_name: 'Default Company',
@@ -28,8 +91,65 @@ const DataEntryForm = ({ onSuccess }: DataEntryFormProps) => {
     notes: '',
   });
   
+  const [category2Options, setCategory2Options] = useState<string[]>([]);
+  const [category3Options, setCategory3Options] = useState<string[]>([]);
+  const [isCategory3Disabled, setIsCategory3Disabled] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // カテゴリ1を選択したときにカテゴリ2のオプションを更新
+  useEffect(() => {
+    if (formData.category1 && CATEGORY_HIERARCHY[formData.category1]) {
+      const cat2Options = Object.keys(CATEGORY_HIERARCHY[formData.category1]);
+      setCategory2Options(cat2Options);
+      // カテゴリ2をリセット
+      setFormData(prev => ({
+        ...prev,
+        category2: '',
+        category3: ''
+      }));
+      setIsCategory3Disabled(true);
+    } else {
+      setCategory2Options([]);
+      setCategory3Options([]);
+      setIsCategory3Disabled(true);
+    }
+  }, [formData.category1]);
+
+  // カテゴリ2を選択したときにカテゴリ3のオプションを更新
+  useEffect(() => {
+    if (formData.category1 && formData.category2 && 
+        CATEGORY_HIERARCHY[formData.category1] && 
+        CATEGORY_HIERARCHY[formData.category1][formData.category2]) {
+      
+      const cat3Options = CATEGORY_HIERARCHY[formData.category1][formData.category2];
+      setCategory3Options(cat3Options);
+      
+      // カテゴリ3のオプションがある場合のみ有効化
+      setIsCategory3Disabled(cat3Options.length === 0);
+      
+      // カテゴリ3をリセット
+      setFormData(prev => ({
+        ...prev,
+        category3: ''
+      }));
+    } else {
+      setCategory3Options([]);
+      setIsCategory3Disabled(true);
+    }
+  }, [formData.category1, formData.category2]);
+
+  // 現在の年月を取得してデフォルト値を設定
+  useEffect(() => {
+    const now = new Date();
+    const year = now.getFullYear();
+    // 月は0から始まるため+1し、2桁にパディング
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    setFormData(prev => ({
+      ...prev,
+      fiscal_month: `${year}/${month}`
+    }));
+  }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -53,10 +173,10 @@ const DataEntryForm = ({ onSuccess }: DataEntryFormProps) => {
         throw new Error('必須項目をすべて入力してください');
       }
       
-      // Ensure fiscal_month is in the correct format (YYYY/M/D)
-      const fiscalMonthPattern = /^\d{4}\/\d{1,2}\/\d{1,2}$/;
+      // 会計月のフォーマットをチェック (YYYY/MM)
+      const fiscalMonthPattern = /^\d{4}\/\d{2}$/;
       if (!fiscalMonthPattern.test(formData.fiscal_month)) {
-        throw new Error('会計月のフォーマットが正しくありません。YYYY/M/D形式で入力してください');
+        throw new Error('会計月のフォーマットが正しくありません。YYYY/MM形式で入力してください');
       }
       
       // 金額を数値に変換
@@ -89,7 +209,7 @@ const DataEntryForm = ({ onSuccess }: DataEntryFormProps) => {
       // Success! Reset the form
       setFormData({
         company_name: 'Default Company',
-        fiscal_month: '',
+        fiscal_month: formData.fiscal_month, // 会計月は維持
         category1: '',
         category2: '',
         category3: '',
@@ -110,8 +230,7 @@ const DataEntryForm = ({ onSuccess }: DataEntryFormProps) => {
   };
 
   // カテゴリーのオプション
-  const category1Options = ['売上高', '製造原価', '販売費・一般管理費', '営業外収益', '営業外費用'];
-  const category2Options = ['派遣業', '警備業', '派遣人件費', '警備人件費', '法定福利費', '福利厚生費', '給与手当'];
+  const category1Options = Object.keys(CATEGORY_HIERARCHY);
 
   return (
     <>
@@ -141,10 +260,11 @@ const DataEntryForm = ({ onSuccess }: DataEntryFormProps) => {
             name="fiscal_month"
             value={formData.fiscal_month}
             onChange={handleChange}
-            placeholder="YYYY/M/D"
+            placeholder="YYYY/MM"
             className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
             required
           />
+          <p className="mt-1 text-xs text-gray-500">例: 2024/02</p>
         </div>
         
         <div>
@@ -170,6 +290,7 @@ const DataEntryForm = ({ onSuccess }: DataEntryFormProps) => {
             value={formData.category2}
             onChange={handleChange}
             className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            disabled={category2Options.length === 0}
           >
             <option value="">選択してください</option>
             {category2Options.map(option => (
@@ -180,13 +301,18 @@ const DataEntryForm = ({ onSuccess }: DataEntryFormProps) => {
         
         <div>
           <label className="block text-sm font-medium text-gray-700">カテゴリ3</label>
-          <input
-            type="text"
+          <select
             name="category3"
-            value={formData.category3 || ''}
+            value={formData.category3}
             onChange={handleChange}
             className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-          />
+            disabled={isCategory3Disabled}
+          >
+            <option value="">選択してください</option>
+            {category3Options.map(option => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
         </div>
         
         <div>

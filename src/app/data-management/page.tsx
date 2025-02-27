@@ -1,19 +1,19 @@
 'use client';
 
 import Link from 'next/link';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import DataEntryForm from '@/components/DataEntryForm';
-import { useRef } from 'react';
+import ExcelStyleGrid from '@/components/ExcelStyleGrid';
 import Papa from 'papaparse';
+import Head from 'next/head';
 
 export default function DataManagement() {
   const [data, setData] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [importLoading, setImportLoading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [editingCell, setEditingCell] = useState<{id: number, field: string} | null>(null);
-  const [editValue, setEditValue] = useState<string>('');
+
   const fetchData = async () => {
     try {
       setIsLoading(true);
@@ -109,7 +109,8 @@ export default function DataManagement() {
       reader.readAsText(file, 'utf-8');
     });
   };
-  const handleDelete = async (id) => {
+
+  const handleDelete = async (id: number) => {
     try {
       const { error } = await supabase
         .from('financial_data')
@@ -121,50 +122,7 @@ export default function DataManagement() {
       fetchData();
     } catch (error) {
       console.error('Error deleting row:', error);
-    }
-  };
-  const startEditing = (id: number, field: string, value: any) => {
-    setEditingCell({ id, field });
-    setEditValue(value?.toString() || '');
-  };
-  
-  const saveEdit = async () => {
-    if (!editingCell) return;
-    
-    try {
-      const { id, field } = editingCell;
-      let value = editValue;
-      
-      // 数値の場合は型変換
-      if (field === 'amount') {
-        value = parseFloat(editValue);
-        if (isNaN(value)) {
-          alert('有効な数値を入力してください');
-          return;
-        }
-      }
-      
-      // Supabaseでデータを更新
-      const { error } = await supabase
-        .from('financial_data')
-        .update({ [field]: value })
-        .eq('id', id);
-        
-      if (error) {
-        console.error('更新エラー:', error);
-        alert(`更新エラー: ${error.message}`);
-        return;
-      }
-      
-      // 編集状態をリセット
-      setEditingCell(null);
-      
-      // データを再取得
-      fetchData();
-      
-    } catch (error) {
-      console.error('データ更新エラー:', error);
-      alert('データの更新に失敗しました');
+      alert('データの削除中にエラーが発生しました');
     }
   };
 
@@ -200,6 +158,30 @@ export default function DataManagement() {
 
   return (
     <main className="min-h-screen bg-gray-100">
+      {/* Add some additional styles for the Excel-like grid */}
+      <Head>
+        <style>{`
+          .excel-grid th {
+            background-color: #f3f4f6;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+            border: 1px solid #e5e7eb;
+          }
+          .excel-grid td {
+            border: 1px solid #e5e7eb;
+            transition: background-color 0.1s;
+          }
+          .excel-grid tr:hover td {
+            background-color: #f9fafb;
+          }
+          .excel-grid input {
+            padding: 0.5rem;
+            width: 100%;
+            height: 100%;
+          }
+        `}</style>
+      </Head>
       <div className="flex">
         {/* サイドバー */}
         <div className="w-64 bg-white shadow-md min-h-screen">
@@ -244,12 +226,12 @@ export default function DataManagement() {
               <DataEntryForm onSuccess={fetchData} />
             </div>
             
-            {/* データ一覧 */}
+            {/* データ一覧 (Excelスタイルのグリッド) */}
             <div className="bg-white rounded-lg shadow-md p-6">
               <div className="flex justify-between items-center mb-4">
                 <h2 className="text-xl font-semibold">データ一覧</h2>
                 <div className="flex space-x-2">
-                <button 
+                  <button 
                     onClick={exportCsv}
                     className="px-3 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 text-sm"
                   >
@@ -277,68 +259,16 @@ export default function DataManagement() {
                   <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="min-w-full divide-y divide-gray-200">
-                    <thead className="bg-gray-50">
-                      <tr>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          会社名
-                        </th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          会計月
-                        </th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          カテゴリ1
-                        </th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          カテゴリ2
-                        </th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          金額
-                        </th>
-                        <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          アクション
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="bg-white divide-y divide-gray-200">
-                      {data.length > 0 ? (
-                        data.map((row) => (
-                          <tr key={row.id}>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm text-gray-900">{row.company_name}</div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm text-gray-900">{row.fiscal_month}</div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm text-gray-900">{row.category1}</div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm text-gray-900">{row.category2}</div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap">
-                              <div className="text-sm text-gray-900">¥{row.amount?.toLocaleString()}</div>
-                            </td>
-                            <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                              <button
-                                onClick={() => handleDelete(row.id)}
-                                className="text-red-600 hover:text-red-900"
-                              >
-                                削除
-                              </button>
-                            </td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan={6} className="px-6 py-4 text-center text-sm text-gray-500">
-                            データがありません
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
+                <div className="border border-gray-200 rounded overflow-hidden excel-grid">
+                  <div className="text-sm text-gray-600 p-2 bg-gray-50 border-b">
+                    <p>セルをクリックして編集できます。Tab キーで次のセルに移動、Enter キーで確定します。</p>
+                    <p className="text-xs mt-1 text-gray-500">※ Escキーでキャンセル、Tab+Shiftで前のセルに移動</p>
+                  </div>
+                  <ExcelStyleGrid 
+                    data={data} 
+                    onDataChange={fetchData}
+                    onDelete={handleDelete}
+                  />
                 </div>
               )}
             </div>
